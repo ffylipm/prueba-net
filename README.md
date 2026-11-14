@@ -8,7 +8,6 @@ Prueba técnica Full Stack .NET.
   - [Probar el flujo](#probar-el-flujo)
   - [Reiniciar la base de datos](#reiniciar-la-base-de-datos)
   - [Instalar el Servicio Windows](#instalar-el-servicio-windows)
-- [El problema](#el-problema)
 - [1. Schema](#1-schema)
 - [2. Estructura de la solución](#2-estructura-de-la-solución)
 - [3. Backend](#3-backend)
@@ -16,6 +15,7 @@ Prueba técnica Full Stack .NET.
 - [5. Frontend](#5-frontend)
 - [6. Pruebas](#6-pruebas)
 - [7. Decisiones técnicas](#7-decisiones-técnicas)
+  - [Problema / contexto](#problema--contexto)
 - [8. Supuestos](#8-supuestos)
 - [9. Revisión de código legado](#9-revisión-de-código-legado)
 - [10. Uso de IA](#10-uso-de-ia)
@@ -92,21 +92,6 @@ Desinstalar:
 ```
 powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
 ```
-
-## El problema
-
-Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo:
-
-- Los usuarios reintentan cuando el sistema va lento, así que la misma solicitud puede llegar dos veces.
-- El proveedor falla de forma transitoria.
-- Una solicitud (mismo `externalReference`) no debe producir dos efectos en el proveedor.
-
-Solución:
-
-- Backend para registrar solicitudes y consultarlas por estado.
-- Frontend para crearlas, listarlas y filtrarlas.
-- Persistencia en SQLite.
-- Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
 
 ## 1. Schema
 
@@ -273,10 +258,26 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ## 7. Decisiones técnicas
 
+### Problema / contexto
+
+Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo:
+
+- Los usuarios reintentan cuando el sistema va lento, así que la misma solicitud puede llegar dos veces.
+- El proveedor falla de forma transitoria.
+- Una solicitud (mismo `externalReference`) no debe producir dos efectos en el proveedor.
+
+Solución:
+
+- Backend para registrar solicitudes y consultarlas por estado.
+- Frontend para crearlas, listarlas y filtrarlas.
+- Persistencia en SQLite.
+- Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
+
+Cada decisión se describe con: problema/contexto, alternativas consideradas, decisión, trade-offs, riesgos y validación.
 ### D1. Duplicados por `externalReference`
 
-- **Contexto:** los usuarios reintentan cuando perciben lentitud (regla 3).
-- **Alternativas:** devolver la solicitud existente con `200` (POST idempotente); confiar solo en el índice único.
+- **Problema/contexto:** los usuarios reintentan cuando perciben lentitud (regla 3).
+- **Alternativas consideradas:** devolver la solicitud existente con `200` (POST idempotente); confiar solo en el índice único.
 - **Decisión:** `RequestService` busca el `externalReference` antes de insertar y el índice único resuelve la carrera entre dos POST. El duplicado responde `409`.
 - **Trade-offs:** un reintento legítimo recibe `409` aunque la solicitud sí se creó; el cliente la encuentra con `GET /api/requests`.
 - **Riesgos:** ninguno de duplicado en base de datos; solo la violación del índice de `ExternalReference` se traduce a `409`, cualquier otro error de base de datos responde `500`.
@@ -284,8 +285,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D2. Envío al proveedor sin efectos duplicados
 
-- **Contexto:** no hay transacción posible entre el proveedor externo y la base de datos.
-- **Alternativas:** marcar `Completed` antes de enviar (como máximo una vez: puede perder envíos); patrón outbox; transacción distribuida.
+- **Problema/contexto:** no hay transacción posible entre el proveedor externo y la base de datos.
+- **Alternativas consideradas:** marcar `Completed` antes de enviar (como máximo una vez: puede perder envíos); patrón outbox; transacción distribuida.
 - **Decisión:** al menos una vez con proveedor idempotente por `ExternalReference`. La solicitud se toma con un `UPDATE` condicional (`Pending → Processing`, `Attempts + 1`); un fallo al guardar después de enviar deja la solicitud en `Processing` y solo se reintenta tras `ProcessingTimeoutSeconds`.
 - **Trade-offs:** depende de que el proveedor real acepte una clave de idempotencia.
 - **Riesgos:** si el proveedor tarda más que `ProcessingTimeoutSeconds`, la solicitud puede reenviarse mientras el primer envío sigue en curso; el timeout debe ser mayor que el del proveedor.
@@ -293,8 +294,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D3. Fallos transitorios
 
-- **Contexto:** la regla 4 no define qué pasa después de un fallo.
-- **Alternativas:** `Failed` al primer fallo; reintentos con backoff exponencial.
+- **Problema/contexto:** la regla 4 no define qué pasa después de un fallo.
+- **Alternativas consideradas:** `Failed` al primer fallo; reintentos con backoff exponencial.
 - **Decisión:** vuelve a `Pending` y se reintenta en el siguiente ciclo; `Failed` al llegar a `MaxAttempts` (3).
 - **Trade-offs:** sin backoff; los reintentos siguen el intervalo fijo del ciclo.
 - **Riesgos:** una caída larga del proveedor deja varias solicitudes en `Failed`, que es final.
@@ -302,8 +303,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D4. Transiciones de estado (regla 5)
 
-- **Contexto:** una solicitud `Completed` no puede volver a un estado anterior.
-- **Alternativas:** métodos de transición en la entidad; librería de máquina de estados.
+- **Problema/contexto:** una solicitud `Completed` no puede volver a un estado anterior.
+- **Alternativas consideradas:** métodos de transición en la entidad; librería de máquina de estados.
 - **Decisión:** tabla de transiciones permitidas en `RequestService`; `UpdateRequestStatusAsync` es el único punto que cambia el estado. `Completed` y `Failed` son finales.
 - **Trade-offs:** la regla vive en el servicio y no en la entidad.
 - **Riesgos:** código que asigne `Status` directamente sin pasar por el servicio.
@@ -311,8 +312,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D5. SQLite con migraciones de EF Core
 
-- **Contexto:** persistencia real sin instalar un motor de base de datos.
-- **Alternativas:** SQL Server LocalDB, SQL Server, MongoDB.
+- **Problema/contexto:** persistencia real sin instalar un motor de base de datos.
+- **Alternativas consideradas:** SQL Server LocalDB, SQL Server, MongoDB.
 - **Decisión:** SQLite en `data/portal.db`; el Backend y el servicio en segundo plano aplican las migraciones al iniciar.
 - **Trade-offs:** cero instalación; SQLite no aplica longitudes máximas (las valida `RequestDTO`) y admite un solo escritor a la vez.
 - **Riesgos:** bloqueos de escritura con mucha carga; en producción las migraciones se aplicarían con un script (`dotnet ef migrations script --idempotent`) y no al iniciar.
@@ -320,8 +321,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D6. Servicio en segundo plano como proceso separado
 
-- **Contexto:** el PDF pide poder ejecutarlo como Windows Service.
-- **Alternativas:** `BackgroundService` dentro del Backend.
+- **Problema/contexto:** el PDF pide poder ejecutarlo como Windows Service.
+- **Alternativas consideradas:** `BackgroundService` dentro del Backend.
 - **Decisión:** proyecto `Prueba.Worker` con `AddWindowsService`, script de instalación.
 - **Trade-offs:** un proyecto y un proceso más.
 - **Riesgos:** la instalación requiere permisos de administrador; el servicio necesita la ruta absoluta de la base (la configura el script).
@@ -329,8 +330,8 @@ React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
 ### D7. `Id` entero autoincremental
 
-- **Contexto:** identificador técnico de la solicitud; la identidad de negocio es `ExternalReference`.
-- **Alternativas:** `Guid`.
+- **Problema/contexto:** identificador técnico de la solicitud; la identidad de negocio es `ExternalReference`.
+- **Alternativas consideradas:** `Guid`.
 - **Decisión:** `int` autoincremental.
 - **Trade-offs:** más simple y legible; los ids son consecutivos y se pueden recorrer en `GET /api/requests/{id}`, aceptable sin autenticación en esta prueba.
 
