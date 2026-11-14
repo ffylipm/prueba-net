@@ -4,7 +4,7 @@ Prueba técnica Full Stack .NET.
 
 ## Cómo ejecutar
 
-Requisitos: .NET SDK 10.
+Requisitos: .NET SDK 10 y Node.js 20 o superior.
 
 1. API en `http://localhost:5112`. Crea `data/portal.db` al iniciar.
 
@@ -18,13 +18,21 @@ Requisitos: .NET SDK 10.
    dotnet run --project src/Prueba.Worker
    ```
 
-3. Pruebas:
+3. Frontend en `http://localhost:5173`, en otra terminal:
+
+   ```
+   cd web
+   npm install
+   npm run dev
+   ```
+
+4. Pruebas:
 
    ```
    dotnet test
    ```
 
-Para probar el flujo, crear una solicitud y consultarla. Pasa de `Pending` a `Completed`, o a `Failed` tras 3 fallos del proveedor simulado:
+Para probar el flujo, registrar una solicitud en el frontend y pulsar Refrescar: pasa de `Pending` a `Completed`, o a `Failed` tras 3 fallos del proveedor simulado. Lo mismo con la API directamente:
 
 ```
 curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
@@ -124,6 +132,15 @@ src/
         ├── RequestWorkerService.cs                  Toma Pending, llama al proveedor y actualiza el estado
         └── WorkerOptions.cs                         WorkerOptions y ProviderOptions (appsettings del Worker)
 
+web/                               React 18 + Vite
+├── src
+│   ├── components
+│   │   ├── RequestForm.jsx                          Formulario para registrar una solicitud
+│   │   └── RequestTable.jsx                         Tabla con filtro por estado y botón Refrescar
+│   ├── api.js                                       Llamadas a /api/requests y lectura de ProblemDetails
+│   └── App.jsx
+└── vite.config.js                                   Proxy /api → http://localhost:5112
+
 scripts/
 ├── install-worker-service.ps1                       Publica e instala el Worker como Windows Service
 └── uninstall-worker-service.ps1
@@ -199,7 +216,15 @@ Configuración en `src/Prueba.Worker/appsettings.json`:
 
 El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. Instalación en [Worker como Windows Service](#worker-como-windows-service).
 
-## 5. Pruebas
+## 5. Frontend
+
+React 18 con Vite. En desarrollo, Vite redirige `/api` a la API, así que el navegador no hace llamadas cross-origin.
+
+- **Formulario:** registra una solicitud. Valida longitudes, bloquea el doble envío y muestra los errores de la API (400 y 409) como mensajes.
+- **Tabla:** muestra `externalReference`, `customerId`, `serviceCode`, descripción, estado, intentos y fecha de actualización.
+- **Filtro por estado** y botón **Refrescar** para ver los cambios que hace el Worker. La lista no se recarga sola.
+
+## 6. Pruebas
 
 27 pruebas (`dotnet test`) sobre los riesgos principales: duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el esquema real, porque dependen del índice único y del `UPDATE` condicional.
 
