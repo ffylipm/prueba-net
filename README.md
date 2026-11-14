@@ -32,3 +32,31 @@ Tabla `Request`:
 | `Attempts`          | `int`                   | Inicia en 0               | Agregado (reintentos) |
 | `InsertAt`          | `DateTimeOffset`        | Obligatorio               | Agregado              |
 | `UpdatedAt`         | `DateTimeOffset`        | Obligatorio               | Agregado              |
+
+## 2. Estructura de la solución
+
+Solución .NET 10 (`Prueba.sln`), base de datos SQLite con EF Core.
+
+```
+src/
+├── Prueba.Api                     API ASP.NET Core
+│   └── Program.cs
+└── Prueba.Core                    Dominio, persistencia y contratos
+    ├── DTOs
+    │   └── RequestDTO.cs          RequestDTO (entrada) y RequestResponseDTO (salida)
+    ├── Enums
+    │   └── RequestStatus.cs       Pending, Processing, Completed, Failed
+    ├── Exceptions
+    │   ├── DuplicateExternalReferenceException.cs   409: mismo externalReference (regla 3)
+    │   └── InvalidStatusTransitionException.cs      409: transición no permitida (regla 5)
+    ├── Interfaces
+    │   ├── IRequestRepository.cs
+    │   └── IRequestService.cs
+    └── Persistence
+        ├── Entities
+        │   └── Request.cs
+        ├── DBContexts
+        │   └── RequestDBContext.cs                  Índice único en ExternalReference, índice en Status
+        └── Migrations
+            └── InitialCreate                        Crea la tabla Request
+```
