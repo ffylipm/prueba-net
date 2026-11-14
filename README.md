@@ -2,6 +2,20 @@
 
 Prueba técnica Full Stack .NET.
 
+## Contenido
+
+- [Cómo ejecutar](#cómo-ejecutar)
+  - [Probar el flujo](#probar-el-flujo)
+  - [Reiniciar la base de datos](#reiniciar-la-base-de-datos)
+  - [Instalar el Servicio Windows](#instalar-el-servicio-windows)
+- [El problema](#el-problema)
+- [1. Schema](#1-schema)
+- [2. Estructura de la solución](#2-estructura-de-la-solución)
+- [3. Backend](#3-backend)
+- [4. Servicio en segundo plano](#4-servicio-en-segundo-plano)
+- [5. Frontend](#5-frontend)
+- [6. Pruebas](#6-pruebas)
+
 ## Cómo ejecutar
 
 Requisitos: .NET SDK 10, Node.js 20+.
@@ -12,7 +26,7 @@ Requisitos: .NET SDK 10, Node.js 20+.
    dotnet run --project src/Prueba.Api
    ```
 
-2. Servicio Windows, en modo consola:
+2. Servicio en segundo plano:
 
    ```
    dotnet run --project src/Prueba.Worker
@@ -49,7 +63,7 @@ Más ejemplos: `src/Prueba.Api/Prueba.Api.http`.
 
 ### Reiniciar la base de datos
 
-Con el Backend y el Servicio Windows detenidos, borrar `data/portal.db`. Se crea de nuevo al iniciar el Backend.
+Con el Backend y el servicio en segundo plano detenidos, borrar `data/portal.db`. Se crea de nuevo al iniciar el Backend.
 
 ### Instalar el Servicio Windows
 
@@ -87,7 +101,7 @@ Solución:
 - Backend para registrar solicitudes y consultarlas por estado.
 - Frontend para crearlas, listarlas y filtrarlas.
 - Persistencia en SQLite.
-- Servicio Windows que envía las pendientes al proveedor y actualiza su estado.
+- Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
 
 ## 1. Schema
 
@@ -118,7 +132,7 @@ src/
 │   │   └── ExceptionHandlingMiddleware.cs           Excepciones → ProblemDetails (409 / 500)
 │   ├── Program.cs                                   Dependencias, CORS, migraciones al iniciar
 │   └── Prueba.Api.http                              Peticiones de ejemplo
-├── Prueba.Worker                  Servicio Windows
+├── Prueba.Worker                  Servicio en segundo plano
 │   ├── ProcessingWorker.cs                          BackgroundService, un ciclo cada PollIntervalSeconds
 │   └── Program.cs                                   AddWindowsService, dependencias, migraciones
 └── Prueba.Core                    Dominio, persistencia y contratos
@@ -202,9 +216,9 @@ Errores, en formato ProblemDetails (RFC 7807):
 
 Duplicados: `RequestService` busca el `externalReference` antes de insertar; el índice único resuelve dos POST simultáneos.
 
-Migraciones: el Backend y el Servicio Windows las aplican al iniciar.
+Migraciones: el Backend y el servicio en segundo plano las aplican al iniciar.
 
-## 4. Servicio Windows
+## 4. Servicio en segundo plano
 
 Ciclo, cada `PollIntervalSeconds`:
 
