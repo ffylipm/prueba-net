@@ -133,7 +133,12 @@ Solución:
 | GET    | `/api/requests?status=` | 200, 400        |
 | GET    | `/api/requests/{id}`    | 200, 404        |
 
-Errores en formato ProblemDetails. 409 = `externalReference` repetido.
+Errores, en formato ProblemDetails:
+
+- `400`: campos vacíos o demasiado largos, o `status` inexistente.
+- `404`: no existe una solicitud con ese `id`.
+- `409`: el `externalReference` ya está registrado.
+- `500`: error no controlado; el detalle va al log.
 
 #### Schema
 
