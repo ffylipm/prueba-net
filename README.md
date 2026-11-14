@@ -198,6 +198,28 @@ tests/
 ```
 
 Cada decisión se describe con: problema/contexto, alternativas consideradas, decisión, trade-offs, riesgos y validación.
+#### API
+
+| Método | Ruta                    | Respuestas      |
+|--------|-------------------------|-----------------|
+| POST   | `/api/requests`         | 201, 400, 409   |
+| GET    | `/api/requests?status=` | 200, 400        |
+| GET    | `/api/requests/{id}`    | 200, 404        |
+
+Errores en formato ProblemDetails. 409 = `externalReference` repetido.
+
+#### Configuración del servicio
+
+`src/Prueba.Worker/appsettings.json`:
+
+| Clave                             | Valor | Uso                         |
+|-----------------------------------|-------|-----------------------------|
+| `Worker:PollIntervalSeconds`      | 5     | Segundos entre ciclos       |
+| `Worker:BatchSize`                | 10    | Solicitudes por ciclo       |
+| `Worker:MaxAttempts`              | 3     | Intentos antes de `Failed`  |
+| `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`      |
+| `Provider:FailureRate`            | 0.3   | Probabilidad de fallo       |
+| `Provider:LatencyMs`              | 300   | Latencia simulada           |
 ### D1. Duplicados por `externalReference`
 
 - **Problema/contexto:** los usuarios reintentan cuando perciben lentitud (regla 3).
