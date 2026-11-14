@@ -3,9 +3,8 @@
 ## Contenido
 
 - [Cómo ejecutar](#cómo-ejecutar)
-  - [Probar el flujo](#probar-el-flujo)
-  - [Reiniciar la base de datos](#reiniciar-la-base-de-datos)
   - [Instalar el Servicio Windows](#instalar-el-servicio-windows)
+  - [Probar el flujo](#probar-el-flujo)
 - [1. Pruebas](#1-pruebas)
 - [2. Decisiones técnicas](#2-decisiones-técnicas)
   - [Problema / contexto](#problema--contexto)
@@ -43,25 +42,6 @@ Requisitos: .NET SDK 10, Node.js 20+.
    dotnet test
    ```
 
-### Probar el flujo
-
-1. Registrar una solicitud en `http://localhost:5173`. Queda en `Pending`.
-2. Pulsar **Refrescar** tras unos segundos. Pasa a `Completed`, o a `Failed` si el proveedor simulado falla 3 veces.
-3. Registrar otra con el mismo `externalReference`. Responde 409.
-
-Endpoint `/api/requests`:
-
-```
-curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
-curl http://localhost:5112/api/requests
-```
-
-Más ejemplos: `src/Prueba.Api/Prueba.Api.http`.
-
-### Reiniciar la base de datos
-
-Con el Backend y el servicio en segundo plano detenidos, borrar `data/portal.db`. Se crea de nuevo al iniciar el Backend.
-
 ### Instalar el Servicio Windows
 
 PowerShell como administrador, desde la raíz del repositorio:
@@ -95,6 +75,21 @@ Configuración del servicio en `src/Prueba.Worker/appsettings.json` (instalado: 
 | `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`      |
 | `Provider:FailureRate`            | 0.3   | Probabilidad de fallo       |
 | `Provider:LatencyMs`              | 300   | Latencia simulada           |
+### Probar el flujo
+
+1. Registrar una solicitud en `http://localhost:5173`. Queda en `Pending`.
+2. Pulsar **Refrescar** tras unos segundos. Pasa a `Completed`, o a `Failed` si el proveedor simulado falla 3 veces.
+3. Registrar otra con el mismo `externalReference`. Responde 409.
+
+Endpoint `/api/requests`:
+
+```
+curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
+curl http://localhost:5112/api/requests
+```
+
+Más ejemplos: `src/Prueba.Api/Prueba.Api.http`.
+
 ## 1. Pruebas
 
 27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
