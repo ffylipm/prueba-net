@@ -40,7 +40,12 @@ Solución .NET 10 (`Prueba.sln`), base de datos SQLite con EF Core.
 ```
 src/
 ├── Prueba.Api                     API ASP.NET Core
-│   └── Program.cs
+│   ├── Controllers
+│   │   └── RequestController.cs                     POST/GET /api/requests
+│   ├── Middlewares
+│   │   └── ExceptionHandlingMiddleware.cs           Excepciones → ProblemDetails (409 / 500)
+│   ├── Program.cs                                   Registro de dependencias, CORS, migraciones al iniciar
+│   └── Prueba.Api.http                              Peticiones de ejemplo
 └── Prueba.Core                    Dominio, persistencia y contratos
     ├── DTOs
     │   └── RequestDTO.cs          RequestDTO (entrada) y RequestResponseDTO (salida)
@@ -52,11 +57,56 @@ src/
     ├── Interfaces
     │   ├── IRequestRepository.cs
     │   └── IRequestService.cs
-    └── Persistence
-        ├── Entities
-        │   └── Request.cs
-        ├── DBContexts
-        │   └── RequestDBContext.cs                  Índice único en ExternalReference, índice en Status
-        └── Migrations
-            └── InitialCreate                        Crea la tabla Request
+    ├── Persistence
+    │   ├── Entities
+    │   │   └── Request.cs
+    │   ├── DBContexts
+    │   │   └── RequestDBContext.cs                  Índice único en ExternalReference, índice en Status
+    │   ├── Migrations
+    │   │   └── InitialCreate                        Crea la tabla Request
+    │   └── RequestRepository.cs                     Traduce la violación del índice único a DuplicateExternalReferenceException
+    └── Services
+        └── RequestService.cs                        Alta con control de duplicados y transiciones de estado válidas
 ```
+
+## 3. API
+
+Base: `http://localhost:5112`
+
+| Método | Ruta                          | Respuesta                                                   |
+|--------|-------------------------------|-------------------------------------------------------------|
+| POST   | `/api/requests`               | `201` con la solicitud en `Pending` y header `Location`     |
+| GET    | `/api/requests?status=Pending`| `200` con la lista, filtro opcional por estado              |
+| GET    | `/api/requests/{id}`          | `200` con la solicitud, `404` si no existe                  |
+
+Cuerpo del POST:
+
+```json
+{
+  "externalReference": "OP-1001",
+  "customerId": "CUST-01",
+  "serviceCode": "INSTALL",
+  "description": "Instalación de equipo"
+}
+```
+
+Errores (formato ProblemDetails, RFC 7807):
+
+| Código | Cuándo                                                                 |
+|--------|------------------------------------------------------------------------|
+| `400`  | Campos vacíos o demasiado largos; `status` con un valor que no existe  |
+| `409`  | Ya existe una solicitud con el mismo `externalReference` (regla 3)     |
+| `500`  | Error no controlado; el detalle va al log, no a la respuesta           |
+
+Duplicados: el servicio busca el `externalReference` antes de insertar, y el índice único cubre el caso de dos POST simultáneos.
+
+### Cómo ejecutar
+
+Requisitos: .NET SDK 10.
+
+```
+dotnet run --project src/Prueba.Api
+```
+
+La base SQLite se crea sola en `data/portal.db` al iniciar (migraciones de EF Core). Para reiniciarla, borrar ese archivo.
+Peticiones de ejemplo en `src/Prueba.Api/Prueba.Api.http`.

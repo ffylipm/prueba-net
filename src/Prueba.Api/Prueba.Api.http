@@ -1,0 +1,38 @@
+@api = http://localhost:5112
+
+### Registrar solicitud
+POST {{api}}/api/requests
+Content-Type: application/json
+
+{
+  "externalReference": "OP-1001",
+  "customerId": "CUST-01",
+  "serviceCode": "INSTALL",
+  "description": "Instalación de equipo"
+}
+
+### Mismo externalReference -> 409
+POST {{api}}/api/requests
+Content-Type: application/json
+
+{
+  "externalReference": "OP-1001",
+  "customerId": "CUST-01",
+  "serviceCode": "INSTALL",
+  "description": "Reintento del usuario"
+}
+
+### Campos vacíos -> 400
+POST {{api}}/api/requests
+Content-Type: application/json
+
+{ "externalReference": "", "customerId": "", "serviceCode": "", "description": "" }
+
+### Listar todas
+GET {{api}}/api/requests
+
+### Filtrar por estado
+GET {{api}}/api/requests?status=Pending
+
+### Estado inválido -> 400
+GET {{api}}/api/requests?status=Foo
