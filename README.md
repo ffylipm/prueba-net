@@ -5,9 +5,9 @@
 - [Cómo ejecutar](#cómo-ejecutar)
   - [Instalar el Servicio Windows](#instalar-el-servicio-windows)
   - [Probar el flujo](#probar-el-flujo)
-- [1. Pruebas](#1-pruebas)
-- [2. Decisiones técnicas](#2-decisiones-técnicas)
+- [1. Decisiones técnicas](#1-decisiones-técnicas)
   - [Problema / contexto](#problema--contexto)
+- [2. Pruebas](#2-pruebas)
 - [3. Supuestos](#3-supuestos)
 - [4. Revisión de código legado](#4-revisión-de-código-legado)
 - [5. Uso de IA](#5-uso-de-ia)
@@ -50,13 +50,6 @@ PowerShell como administrador, desde la raíz del repositorio:
 powershell -ExecutionPolicy Bypass -File scripts\install-worker-service.ps1
 ```
 
-El script:
-
-- Publica `Prueba.Worker` en `C:\Services\PruebaWorker`.
-- Configura la ruta absoluta de `data\portal.db`, la misma base del Backend.
-- Crea el servicio `PruebaWorker` con inicio automático y reinicio ante fallos, y lo inicia.
-- Reemplaza una instalación anterior.
-
 Parámetros opcionales: `-ServiceName`, `-InstallPath`, `-DatabasePath`.
 
 Desinstalar:
@@ -90,18 +83,7 @@ curl http://localhost:5112/api/requests
 
 Más ejemplos: `src/Prueba.Api/Prueba.Api.http`.
 
-## 1. Pruebas
-
-27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
-
-| Archivo                     | Escenarios                                                                                          |
-|-----------------------------|-----------------------------------------------------------------------------------------------------|
-| `StatusRulesTests`          | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` falla y no persiste  |
-| `RequestRepositoryTests`    | Violación del índice único → duplicado; otro error de base de datos no se trata como duplicado      |
-| `RequestWorkerServiceTests` | Éxito con un envío; fallo y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; un solo proceso toma la solicitud; fallo al guardar no reenvía; recuperación tras timeout |
-| `RequestControllerTests`    | POST → `Pending`; POST repetido → 409; 10 POST simultáneos → una solicitud; campos vacíos → 400; filtro por estado; estado inválido → 400 |
-
-## 2. Decisiones técnicas
+## 1. Decisiones técnicas
 
 ### Problema / contexto
 
@@ -280,6 +262,17 @@ Cada decisión se describe con: problema/contexto, alternativas consideradas, de
 ### SQL vs NoSQL
 
 Con MongoDB, la regla 3 se apoyaría en un índice único sobre `externalReference` y en la misma búsqueda previa en el servicio; el duplicado se detectaría por el código de error `11000`. No habría migraciones: el esquema vive en el código, con un índice en `status` para el filtro. La toma de una solicitud sería un `findOneAndUpdate` con filtro por estado, atómico por documento, que basta para este flujo. Se pierden las restricciones relacionales y las consultas SQL ad hoc.
+
+## 2. Pruebas
+
+27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
+
+| Archivo                     | Escenarios                                                                                          |
+|-----------------------------|-----------------------------------------------------------------------------------------------------|
+| `StatusRulesTests`          | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` falla y no persiste  |
+| `RequestRepositoryTests`    | Violación del índice único → duplicado; otro error de base de datos no se trata como duplicado      |
+| `RequestWorkerServiceTests` | Éxito con un envío; fallo y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; un solo proceso toma la solicitud; fallo al guardar no reenvía; recuperación tras timeout |
+| `RequestControllerTests`    | POST → `Pending`; POST repetido → 409; 10 POST simultáneos → una solicitud; campos vacíos → 400; filtro por estado; estado inválido → 400 |
 
 ## 3. Supuestos
 
