@@ -4,21 +4,21 @@ Prueba técnica Full Stack .NET.
 
 ## Cómo ejecutar
 
-Requisitos: .NET SDK 10 y Node.js 20 o superior.
+Requisitos: .NET SDK 10, Node.js 20+.
 
-1. API en `http://localhost:5112`. Crea `data/portal.db` al iniciar.
+1. Backend (`http://localhost:5112`):
 
    ```
    dotnet run --project src/Prueba.Api
    ```
 
-2. Worker, en otra terminal:
+2. Servicio Windows, en modo consola:
 
    ```
    dotnet run --project src/Prueba.Worker
    ```
 
-3. Frontend en `http://localhost:5173`, en otra terminal:
+3. Frontend (`http://localhost:5173`):
 
    ```
    cd web
@@ -32,26 +32,43 @@ Requisitos: .NET SDK 10 y Node.js 20 o superior.
    dotnet test
    ```
 
-Para probar el flujo, registrar una solicitud en el frontend y pulsar Refrescar: pasa de `Pending` a `Completed`, o a `Failed` tras 3 fallos del proveedor simulado. Lo mismo con la API directamente:
+### Probar el flujo
+
+1. Registrar una solicitud en `http://localhost:5173`. Queda en `Pending`.
+2. Pulsar **Refrescar** tras unos segundos. Pasa a `Completed`, o a `Failed` si el proveedor simulado falla 3 veces.
+3. Registrar otra con el mismo `externalReference`. Responde 409.
+
+Endpoint `/api/requests`:
 
 ```
 curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
 curl http://localhost:5112/api/requests
 ```
 
-Más ejemplos en `src/Prueba.Api/Prueba.Api.http`. Para reiniciar la base, borrar `data/portal.db`.
+Más ejemplos: `src/Prueba.Api/Prueba.Api.http`.
 
-### Worker como Windows Service
+### Reiniciar la base de datos
 
-En PowerShell como administrador, desde la raíz del repositorio:
+Con el Backend y el Servicio Windows detenidos, borrar `data/portal.db`. Se crea de nuevo al iniciar el Backend.
+
+### Instalar el Servicio Windows
+
+PowerShell como administrador, desde la raíz del repositorio:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\install-worker-service.ps1
 ```
 
-Publica el Worker en `C:\Services\PruebaWorker`, configura la ruta absoluta de `data\portal.db` (la misma que usa la API), crea el servicio `PruebaWorker` con inicio automático y reinicio ante fallos, y lo arranca. Si ya existe, lo reemplaza. Parámetros opcionales: `-ServiceName`, `-InstallPath`, `-DatabasePath`.
+El script:
 
-Para quitarlo:
+- Publica `Prueba.Worker` en `C:\Services\PruebaWorker`.
+- Configura la ruta absoluta de `data\portal.db`, la misma base del Backend.
+- Crea el servicio `PruebaWorker` con inicio automático y reinicio ante fallos, y lo inicia.
+- Reemplaza una instalación anterior.
+
+Parámetros opcionales: `-ServiceName`, `-InstallPath`, `-DatabasePath`.
+
+Desinstalar:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
@@ -59,18 +76,18 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
 
 ## El problema
 
-Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo. Hay tres dificultades:
+Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo:
 
 - Los usuarios reintentan cuando el sistema va lento, así que la misma solicitud puede llegar dos veces.
-- El proveedor a veces falla de forma temporal.
-- Una solicitud (mismo `externalReference`) nunca debe procesarse dos veces en el proveedor.
+- El proveedor falla de forma transitoria.
+- Una solicitud (mismo `externalReference`) no debe producir dos efectos en el proveedor.
 
 Solución:
 
-- Una API para registrar solicitudes y consultarlas por estado.
-- Una pantalla para crearlas, verlas y filtrarlas.
-- Una base de datos real.
-- Un proceso en segundo plano, instalable como Windows Service, que envíe las pendientes al proveedor externo y actualice su estado.
+- Backend para registrar solicitudes y consultarlas por estado.
+- Frontend para crearlas, listarlas y filtrarlas.
+- Persistencia en SQLite.
+- Servicio Windows que envía las pendientes al proveedor y actualiza su estado.
 
 ## 1. Schema
 
@@ -90,28 +107,28 @@ Tabla `Request`:
 
 ## 2. Estructura de la solución
 
-Solución .NET 10 (`Prueba.sln`), base de datos SQLite con EF Core.
+Solución .NET 10 (`Prueba.sln`), SQLite con EF Core.
 
 ```
 src/
-├── Prueba.Api                     API ASP.NET Core
+├── Prueba.Api                     Backend, ASP.NET Core
 │   ├── Controllers
 │   │   └── RequestController.cs                     POST/GET /api/requests
 │   ├── Middlewares
 │   │   └── ExceptionHandlingMiddleware.cs           Excepciones → ProblemDetails (409 / 500)
-│   ├── Program.cs                                   Registro de dependencias, CORS, migraciones al iniciar
+│   ├── Program.cs                                   Dependencias, CORS, migraciones al iniciar
 │   └── Prueba.Api.http                              Peticiones de ejemplo
-├── Prueba.Worker                  Proceso en segundo plano (Windows Service)
-│   ├── ProcessingWorker.cs                          BackgroundService: un ciclo cada PollIntervalSeconds
-│   └── Program.cs                                   AddWindowsService, registro de dependencias, migraciones
+├── Prueba.Worker                  Servicio Windows
+│   ├── ProcessingWorker.cs                          BackgroundService, un ciclo cada PollIntervalSeconds
+│   └── Program.cs                                   AddWindowsService, dependencias, migraciones
 └── Prueba.Core                    Dominio, persistencia y contratos
     ├── DTOs
-    │   └── RequestDTO.cs          RequestDTO (entrada) y RequestResponseDTO (salida)
+    │   └── RequestDTO.cs                            RequestDTO (entrada), RequestResponseDTO (salida)
     ├── Enums
-    │   └── RequestStatus.cs       Pending, Processing, Completed, Failed
+    │   └── RequestStatus.cs                         Pending, Processing, Completed, Failed
     ├── Exceptions
-    │   ├── DuplicateExternalReferenceException.cs   409: mismo externalReference (regla 3)
-    │   ├── InvalidStatusTransitionException.cs      409: transición no permitida (regla 5)
+    │   ├── DuplicateExternalReferenceException.cs   409, mismo externalReference (regla 3)
+    │   ├── InvalidStatusTransitionException.cs      409, transición no permitida (regla 5)
     │   └── ProviderException.cs                     Fallo transitorio del proveedor (regla 4)
     ├── Interfaces
     │   ├── IExternalProvider.cs
@@ -124,47 +141,47 @@ src/
     │   ├── DBContexts
     │   │   └── RequestDBContext.cs                  Índice único en ExternalReference, índice en Status
     │   ├── Migrations
-    │   │   └── InitialCreate                        Crea la tabla Request
-    │   └── RequestRepository.cs                     Traduce la violación del índice único a DuplicateExternalReferenceException
+    │   │   └── InitialCreate                        Tabla Request
+    │   └── RequestRepository.cs                     Violación del índice único → DuplicateExternalReferenceException
     └── Services
-        ├── ExternalProviderSimulation.cs            Proveedor simulado: fallo transitorio aleatorio, idempotente por ExternalReference
-        ├── RequestService.cs                        Alta con control de duplicados y transiciones de estado válidas
-        ├── RequestWorkerService.cs                  Toma Pending, llama al proveedor y actualiza el estado
-        └── WorkerOptions.cs                         WorkerOptions y ProviderOptions (appsettings del Worker)
+        ├── ExternalProviderSimulation.cs            Proveedor simulado, idempotente por ExternalReference
+        ├── RequestService.cs                        Alta, control de duplicados, transiciones de estado
+        ├── RequestWorkerService.cs                  Procesa Pending contra el proveedor
+        └── WorkerOptions.cs                         WorkerOptions, ProviderOptions
 
-web/                               React 18 + Vite
+web/                               Frontend, React 18 + Vite
 ├── src
 │   ├── components
-│   │   ├── RequestForm.jsx                          Formulario para registrar una solicitud
-│   │   └── RequestTable.jsx                         Tabla con filtro por estado y botón Refrescar
-│   ├── api.js                                       Llamadas a /api/requests y lectura de ProblemDetails
+│   │   ├── RequestForm.jsx                          Registro de solicitudes
+│   │   └── RequestTable.jsx                         Listado, filtro por estado, Refrescar
+│   ├── api.js                                       Cliente de /api/requests
 │   └── App.jsx
 └── vite.config.js                                   Proxy /api → http://localhost:5112
 
 scripts/
-├── install-worker-service.ps1                       Publica e instala el Worker como Windows Service
-└── uninstall-worker-service.ps1
+├── install-worker-service.ps1                       Instala el Servicio Windows
+└── uninstall-worker-service.ps1                     Desinstala el Servicio Windows
 
 tests/
-└── Prueba.Tests                   xUnit
-    ├── Helpers                                      TestDb (SQLite en memoria), FakeProvider, ApiFactory, FailOnCompletedRequestService
+└── Prueba.Tests                   Pruebas, xUnit
+    ├── Helpers                                      TestDb, FakeProvider, ApiFactory, FailOnCompletedRequestService
     ├── RequestControllerTests.cs
     ├── RequestRepositoryTests.cs
     ├── RequestWorkerServiceTests.cs
     └── StatusRulesTests.cs
 ```
 
-## 3. API
+## 3. Backend
 
-Base: `http://localhost:5112`
+URL base: `http://localhost:5112`
 
-| Método | Ruta                          | Respuesta                                                   |
-|--------|-------------------------------|-------------------------------------------------------------|
-| POST   | `/api/requests`               | `201` con la solicitud en `Pending` y header `Location`     |
-| GET    | `/api/requests?status=Pending`| `200` con la lista, filtro opcional por estado              |
-| GET    | `/api/requests/{id}`          | `200` con la solicitud, `404` si no existe                  |
+| Método | Ruta                           | Respuesta                                        |
+|--------|--------------------------------|--------------------------------------------------|
+| POST   | `/api/requests`                | `201`, solicitud en `Pending`, header `Location` |
+| GET    | `/api/requests?status=Pending` | `200`, lista; `status` opcional                  |
+| GET    | `/api/requests/{id}`           | `200`, solicitud; `404` si no existe             |
 
-Cuerpo del POST:
+Body del POST:
 
 ```json
 {
@@ -175,62 +192,62 @@ Cuerpo del POST:
 }
 ```
 
-Errores (formato ProblemDetails, RFC 7807):
+Errores, en formato ProblemDetails (RFC 7807):
 
-| Código | Cuándo                                                                 |
-|--------|------------------------------------------------------------------------|
-| `400`  | Campos vacíos o demasiado largos; `status` con un valor que no existe  |
-| `409`  | Ya existe una solicitud con el mismo `externalReference` (regla 3)     |
-| `500`  | Error no controlado; el detalle va al log, no a la respuesta           |
+| Código | Causa                                                        |
+|--------|--------------------------------------------------------------|
+| `400`  | Campos vacíos o demasiado largos; `status` inexistente       |
+| `409`  | `externalReference` ya registrado (regla 3)                  |
+| `500`  | Error no controlado; el detalle va al log                    |
 
-Duplicados: el servicio busca el `externalReference` antes de insertar, y el índice único cubre el caso de dos POST simultáneos.
+Duplicados: `RequestService` busca el `externalReference` antes de insertar; el índice único resuelve dos POST simultáneos.
 
-Base de datos: la API y el Worker aplican las migraciones de EF Core al iniciar, así que `data/portal.db` se crea con el schema sin pasos manuales.
+Migraciones: el Backend y el Servicio Windows las aplican al iniciar.
 
-## 4. Worker
+## 4. Servicio Windows
 
-Cada `PollIntervalSeconds` el Worker:
+Ciclo, cada `PollIntervalSeconds`:
 
-1. Devuelve a `Pending` las solicitudes que llevan en `Processing` más de `ProcessingTimeoutSeconds` (proceso caído o fallo al guardar).
-2. Lee un lote de `Pending` (`BatchSize`).
-3. Por cada una, la toma con un `UPDATE` condicional: `Pending → Processing` y `Attempts + 1` en una sola sentencia. Si otro proceso ya la tomó, la salta.
-4. Llama al proveedor simulado con `ExternalReference` como clave de idempotencia.
-   - Éxito → `Completed`.
-   - Fallo transitorio → vuelve a `Pending`; al llegar a `MaxAttempts` pasa a `Failed`.
-   - Éxito pero falla el guardado → queda en `Processing` y no se reenvía hasta el timeout del paso 1.
+1. Devuelve a `Pending` las solicitudes en `Processing` por más de `ProcessingTimeoutSeconds`.
+2. Lee hasta `BatchSize` solicitudes `Pending`.
+3. Toma cada una con un `UPDATE` condicional (`Pending → Processing`, `Attempts + 1`). Si otro proceso ya la tomó, la salta.
+4. Llama al proveedor con `ExternalReference` como clave de idempotencia:
+   - Éxito: `Completed`.
+   - Fallo transitorio: `Pending`, o `Failed` al llegar a `MaxAttempts`.
+   - Éxito con fallo al guardar: queda en `Processing` hasta el paso 1.
 
-Estados: `Pending → Processing → Completed | Pending | Failed`. `Completed` y `Failed` son finales (regla 5).
+Transiciones: `Pending → Processing → Completed | Pending | Failed`. `Completed` y `Failed` son finales (regla 5).
 
-No hay transacción posible entre el proveedor y la base de datos: la garantía es "al menos una vez" con un proveedor idempotente por `ExternalReference` (regla 3).
+Garantía: al menos una vez. No hay transacción entre el proveedor y la base de datos; un reenvío es seguro porque el proveedor es idempotente por `ExternalReference` (regla 3).
 
-Configuración en `src/Prueba.Worker/appsettings.json`:
+Configuración (`src/Prueba.Worker/appsettings.json`):
 
-| Clave                             | Por defecto | Uso                                               |
-|-----------------------------------|-------------|---------------------------------------------------|
-| `Worker:PollIntervalSeconds`      | 5           | Segundos entre ciclos                             |
-| `Worker:BatchSize`                | 10          | Solicitudes por ciclo                             |
-| `Worker:MaxAttempts`              | 3           | Intentos antes de `Failed`                        |
-| `Worker:ProcessingTimeoutSeconds` | 60          | Tiempo para considerar atascada una solicitud     |
-| `Provider:FailureRate`            | 0.3         | Probabilidad de fallo transitorio del simulado    |
-| `Provider:LatencyMs`              | 300         | Latencia simulada                                 |
+| Clave                             | Valor | Uso                                    |
+|-----------------------------------|-------|----------------------------------------|
+| `Worker:PollIntervalSeconds`      | 5     | Segundos entre ciclos                  |
+| `Worker:BatchSize`                | 10    | Solicitudes por ciclo                  |
+| `Worker:MaxAttempts`              | 3     | Intentos antes de `Failed`             |
+| `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`                 |
+| `Provider:FailureRate`            | 0.3   | Probabilidad de fallo del simulado     |
+| `Provider:LatencyMs`              | 300   | Latencia del simulado                  |
 
-El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. Instalación en [Worker como Windows Service](#worker-como-windows-service).
+Hosting: `AddWindowsService` permite ejecutarlo en consola o como servicio (Service Control Manager, Event Log). Ver [Instalar el Servicio Windows](#instalar-el-servicio-windows).
 
 ## 5. Frontend
 
-React 18 con Vite. En desarrollo, Vite redirige `/api` a la API, así que el navegador no hace llamadas cross-origin.
+React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
 
-- **Formulario:** registra una solicitud. Valida longitudes, bloquea el doble envío y muestra los errores de la API (400 y 409) como mensajes.
-- **Tabla:** muestra `externalReference`, `customerId`, `serviceCode`, descripción, estado, intentos y fecha de actualización.
-- **Filtro por estado** y botón **Refrescar** para ver los cambios que hace el Worker. La lista no se recarga sola.
+- **RequestForm:** registra solicitudes; valida longitudes, evita el doble envío y muestra los errores 400 y 409.
+- **RequestTable:** `externalReference`, `customerId`, `serviceCode`, descripción, estado, intentos y última actualización.
+- **Filtro por estado** y botón **Refrescar**. Sin recarga automática.
 
 ## 6. Pruebas
 
-27 pruebas (`dotnet test`) sobre los riesgos principales: duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el esquema real, porque dependen del índice único y del `UPDATE` condicional.
+27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
 
-| Archivo                         | Escenarios                                                                                          |
-|---------------------------------|-----------------------------------------------------------------------------------------------------|
-| `StatusRulesTests`              | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` lanza error y no persiste |
-| `RequestRepositoryTests`        | La violación del índice único es duplicado; otro error de base de datos no se reporta como duplicado |
-| `RequestWorkerServiceTests`     | Éxito con un solo envío; fallo transitorio y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; solo un proceso toma la solicitud; fallo al guardar tras enviar no reenvía; recuperación tras timeout |
-| `RequestControllerTests`        | POST crea `Pending`; POST repetido → 409; 10 POST simultáneos crean una sola solicitud; campos vacíos → 400; filtro por estado y estado inválido → 400 |
+| Archivo                     | Escenarios                                                                                          |
+|-----------------------------|-----------------------------------------------------------------------------------------------------|
+| `StatusRulesTests`          | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` falla y no persiste  |
+| `RequestRepositoryTests`    | Violación del índice único → duplicado; otro error de base de datos no se trata como duplicado      |
+| `RequestWorkerServiceTests` | Éxito con un envío; fallo y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; un solo proceso toma la solicitud; fallo al guardar no reenvía; recuperación tras timeout |
+| `RequestControllerTests`    | POST → `Pending`; POST repetido → 409; 10 POST simultáneos → una solicitud; campos vacíos → 400; filtro por estado; estado inválido → 400 |
