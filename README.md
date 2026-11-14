@@ -8,19 +8,13 @@ Prueba técnica Full Stack .NET.
   - [Probar el flujo](#probar-el-flujo)
   - [Reiniciar la base de datos](#reiniciar-la-base-de-datos)
   - [Instalar el Servicio Windows](#instalar-el-servicio-windows)
-- [1. Schema](#1-schema)
-- [2. Estructura de la solución](#2-estructura-de-la-solución)
-- [3. Backend](#3-backend)
-- [4. Servicio en segundo plano](#4-servicio-en-segundo-plano)
-- [5. Frontend](#5-frontend)
-- [6. Pruebas](#6-pruebas)
-- [7. Decisiones técnicas](#7-decisiones-técnicas)
+- [1. Pruebas](#1-pruebas)
+- [2. Decisiones técnicas](#2-decisiones-técnicas)
   - [Problema / contexto](#problema--contexto)
-- [8. Supuestos](#8-supuestos)
-- [9. Revisión de código legado](#9-revisión-de-código-legado)
-- [10. Uso de IA](#10-uso-de-ia)
-- [11. Pendiente](#11-pendiente)
-
+- [3. Supuestos](#3-supuestos)
+- [4. Revisión de código legado](#4-revisión-de-código-legado)
+- [5. Uso de IA](#5-uso-de-ia)
+- [6. Pendiente](#6-pendiente)
 ## Cómo ejecutar
 
 Requisitos: .NET SDK 10, Node.js 20+.
@@ -93,7 +87,35 @@ Desinstalar:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
 ```
 
-## 1. Schema
+## 1. Pruebas
+
+27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
+
+| Archivo                     | Escenarios                                                                                          |
+|-----------------------------|-----------------------------------------------------------------------------------------------------|
+| `StatusRulesTests`          | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` falla y no persiste  |
+| `RequestRepositoryTests`    | Violación del índice único → duplicado; otro error de base de datos no se trata como duplicado      |
+| `RequestWorkerServiceTests` | Éxito con un envío; fallo y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; un solo proceso toma la solicitud; fallo al guardar no reenvía; recuperación tras timeout |
+| `RequestControllerTests`    | POST → `Pending`; POST repetido → 409; 10 POST simultáneos → una solicitud; campos vacíos → 400; filtro por estado; estado inválido → 400 |
+
+## 2. Decisiones técnicas
+
+### Problema / contexto
+
+Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo:
+
+- Los usuarios reintentan cuando el sistema va lento, así que la misma solicitud puede llegar dos veces.
+- El proveedor falla de forma transitoria.
+- Una solicitud (mismo `externalReference`) no debe producir dos efectos en el proveedor.
+
+Solución:
+
+- Backend para registrar solicitudes y consultarlas por estado.
+- Frontend para crearlas, listarlas y filtrarlas.
+- Persistencia en SQLite.
+- Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
+
+#### Schema
 
 Tabla `Request`:
 
@@ -109,7 +131,7 @@ Tabla `Request`:
 | `InsertAt`          | `DateTimeOffset`        | Obligatorio               | Agregado              |
 | `UpdatedAt`         | `DateTimeOffset`        | Obligatorio               | Agregado              |
 
-## 2. Estructura de la solución
+#### Estructura de la solución
 
 Solución .NET 10 (`Prueba.sln`), SQLite con EF Core.
 
@@ -174,104 +196,6 @@ tests/
     ├── RequestWorkerServiceTests.cs
     └── StatusRulesTests.cs
 ```
-
-## 3. Backend
-
-URL base: `http://localhost:5112`
-
-| Método | Ruta                           | Respuesta                                        |
-|--------|--------------------------------|--------------------------------------------------|
-| POST   | `/api/requests`                | `201`, solicitud en `Pending`, header `Location` |
-| GET    | `/api/requests?status=Pending` | `200`, lista; `status` opcional                  |
-| GET    | `/api/requests/{id}`           | `200`, solicitud; `404` si no existe             |
-
-Body del POST:
-
-```json
-{
-  "externalReference": "OP-1001",
-  "customerId": "CUST-01",
-  "serviceCode": "INSTALL",
-  "description": "Instalación de equipo"
-}
-```
-
-Errores, en formato ProblemDetails (RFC 7807):
-
-| Código | Causa                                                        |
-|--------|--------------------------------------------------------------|
-| `400`  | Campos vacíos o demasiado largos; `status` inexistente       |
-| `409`  | `externalReference` ya registrado (regla 3)                  |
-| `500`  | Error no controlado; el detalle va al log                    |
-
-Duplicados: `RequestService` busca el `externalReference` antes de insertar; el índice único resuelve dos POST simultáneos.
-
-Migraciones: el Backend y el servicio en segundo plano las aplican al iniciar.
-
-## 4. Servicio en segundo plano
-
-Ciclo, cada `PollIntervalSeconds`:
-
-1. Devuelve a `Pending` las solicitudes en `Processing` por más de `ProcessingTimeoutSeconds`.
-2. Lee hasta `BatchSize` solicitudes `Pending`.
-3. Toma cada una con un `UPDATE` condicional (`Pending → Processing`, `Attempts + 1`). Si otro proceso ya la tomó, la salta.
-4. Llama al proveedor con `ExternalReference` como clave de idempotencia:
-   - Éxito: `Completed`.
-   - Fallo transitorio: `Pending`, o `Failed` al llegar a `MaxAttempts`.
-   - Éxito con fallo al guardar: queda en `Processing` hasta el paso 1.
-
-Transiciones: `Pending → Processing → Completed | Pending | Failed`. `Completed` y `Failed` son finales (regla 5).
-
-Garantía: al menos una vez. No hay transacción entre el proveedor y la base de datos; un reenvío es seguro porque el proveedor es idempotente por `ExternalReference` (regla 3).
-
-Configuración (`src/Prueba.Worker/appsettings.json`):
-
-| Clave                             | Valor | Uso                                    |
-|-----------------------------------|-------|----------------------------------------|
-| `Worker:PollIntervalSeconds`      | 5     | Segundos entre ciclos                  |
-| `Worker:BatchSize`                | 10    | Solicitudes por ciclo                  |
-| `Worker:MaxAttempts`              | 3     | Intentos antes de `Failed`             |
-| `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`                 |
-| `Provider:FailureRate`            | 0.3   | Probabilidad de fallo del simulado     |
-| `Provider:LatencyMs`              | 300   | Latencia del simulado                  |
-
-Hosting: `AddWindowsService` permite ejecutarlo en consola o como servicio (Service Control Manager, Event Log). Ver [Instalar el Servicio Windows](#instalar-el-servicio-windows).
-
-## 5. Frontend
-
-React 18 + Vite. En desarrollo, Vite hace proxy de `/api` al Backend.
-
-- **RequestForm:** registra solicitudes; valida longitudes, evita el doble envío y muestra los errores 400 y 409.
-- **RequestTable:** `externalReference`, `customerId`, `serviceCode`, descripción, estado, intentos y última actualización.
-- **Filtro por estado** y botón **Refrescar**. Sin recarga automática.
-
-## 6. Pruebas
-
-27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
-
-| Archivo                     | Escenarios                                                                                          |
-|-----------------------------|-----------------------------------------------------------------------------------------------------|
-| `StatusRulesTests`          | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` falla y no persiste  |
-| `RequestRepositoryTests`    | Violación del índice único → duplicado; otro error de base de datos no se trata como duplicado      |
-| `RequestWorkerServiceTests` | Éxito con un envío; fallo y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; un solo proceso toma la solicitud; fallo al guardar no reenvía; recuperación tras timeout |
-| `RequestControllerTests`    | POST → `Pending`; POST repetido → 409; 10 POST simultáneos → una solicitud; campos vacíos → 400; filtro por estado; estado inválido → 400 |
-
-## 7. Decisiones técnicas
-
-### Problema / contexto
-
-Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo:
-
-- Los usuarios reintentan cuando el sistema va lento, así que la misma solicitud puede llegar dos veces.
-- El proveedor falla de forma transitoria.
-- Una solicitud (mismo `externalReference`) no debe producir dos efectos en el proveedor.
-
-Solución:
-
-- Backend para registrar solicitudes y consultarlas por estado.
-- Frontend para crearlas, listarlas y filtrarlas.
-- Persistencia en SQLite.
-- Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
 
 Cada decisión se describe con: problema/contexto, alternativas consideradas, decisión, trade-offs, riesgos y validación.
 ### D1. Duplicados por `externalReference`
@@ -339,7 +263,7 @@ Cada decisión se describe con: problema/contexto, alternativas consideradas, de
 
 Con MongoDB, la regla 3 se apoyaría en un índice único sobre `externalReference` y en la misma búsqueda previa en el servicio; el duplicado se detectaría por el código de error `11000`. No habría migraciones: el esquema vive en el código, con un índice en `status` para el filtro. La toma de una solicitud sería un `findOneAndUpdate` con filtro por estado, atómico por documento, que basta para este flujo. Se pierden las restricciones relacionales y las consultas SQL ad hoc.
 
-## 8. Supuestos
+## 3. Supuestos
 
 - **A1.** Un POST con un `externalReference` existente responde `409`; no devuelve la solicitud existente.
 - **A2.** Un fallo transitorio devuelve la solicitud a `Pending`; tras 3 intentos pasa a `Failed`.
@@ -349,7 +273,7 @@ Con MongoDB, la regla 3 se apoyaría en un índice único sobre `externalReferen
 - **A6.** El frontend no se actualiza solo; el botón Refrescar muestra el avance del servicio en segundo plano.
 - **A7.** Sin autenticación, como permite el PDF.
 
-## 9. Revisión de código legado
+## 4. Revisión de código legado
 
 ### Fragmento A (WebForms)
 
@@ -414,7 +338,7 @@ public ActionResult UpdateStatus(int id, string status)
 }
 ```
 
-## 10. Uso de IA
+## 5. Uso de IA
 
 - **Para qué:** Claude Code para generar la estructura de la solución, borradores de código, pruebas y el README.
 - **Cómo se verificó:** compilación sin advertencias, 27 pruebas automatizadas y ejecución manual del Backend, el servicio en segundo plano y el frontend juntos.
@@ -426,7 +350,7 @@ public ActionResult UpdateStatus(int id, string status)
   - Se quitó una clase de registro de dependencias compartida en favor de registros explícitos en cada `Program.cs`.
   - Ajustes de nombres de métodos y de estilo (llaves en todos los bloques).
 
-## 11. Pendiente
+## 6. Pendiente
 
 - **Estado actual:** todos los componentes del PDF están implementados y probados.
 - **Decisión pendiente:** si un POST duplicado debe responder `200` con la solicitud existente en lugar de `409` (A1).
