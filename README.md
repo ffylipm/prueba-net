@@ -1,6 +1,4 @@
-# Portal de solicitudes y procesamiento en segundo plano
-
-Prueba técnica Full Stack .NET.
+# Prueba técnica Full Stack .NET.
 
 ## Contenido
 
