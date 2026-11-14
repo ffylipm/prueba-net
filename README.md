@@ -46,6 +46,9 @@ src/
 │   │   └── ExceptionHandlingMiddleware.cs           Excepciones → ProblemDetails (409 / 500)
 │   ├── Program.cs                                   Registro de dependencias, CORS, migraciones al iniciar
 │   └── Prueba.Api.http                              Peticiones de ejemplo
+├── Prueba.Worker                  Proceso en segundo plano (Windows Service)
+│   ├── ProcessingWorker.cs                          BackgroundService: un ciclo cada PollIntervalSeconds
+│   └── Program.cs                                   AddWindowsService, registro de dependencias, migraciones
 └── Prueba.Core                    Dominio, persistencia y contratos
     ├── DTOs
     │   └── RequestDTO.cs          RequestDTO (entrada) y RequestResponseDTO (salida)
@@ -53,10 +56,13 @@ src/
     │   └── RequestStatus.cs       Pending, Processing, Completed, Failed
     ├── Exceptions
     │   ├── DuplicateExternalReferenceException.cs   409: mismo externalReference (regla 3)
-    │   └── InvalidStatusTransitionException.cs      409: transición no permitida (regla 5)
+    │   ├── InvalidStatusTransitionException.cs      409: transición no permitida (regla 5)
+    │   └── ProviderException.cs                     Fallo transitorio del proveedor (regla 4)
     ├── Interfaces
+    │   ├── IExternalProvider.cs
     │   ├── IRequestRepository.cs
-    │   └── IRequestService.cs
+    │   ├── IRequestService.cs
+    │   └── IRequestWorkerService.cs
     ├── Persistence
     │   ├── Entities
     │   │   └── Request.cs
@@ -66,7 +72,18 @@ src/
     │   │   └── InitialCreate                        Crea la tabla Request
     │   └── RequestRepository.cs                     Traduce la violación del índice único a DuplicateExternalReferenceException
     └── Services
-        └── RequestService.cs                        Alta con control de duplicados y transiciones de estado válidas
+        ├── ExternalProviderSimulation.cs            Proveedor simulado: fallo transitorio aleatorio, idempotente por ExternalReference
+        ├── RequestService.cs                        Alta con control de duplicados y transiciones de estado válidas
+        ├── RequestWorkerService.cs                  Toma Pending, llama al proveedor y actualiza el estado
+        └── WorkerOptions.cs                         WorkerOptions y ProviderOptions (appsettings del Worker)
+
+tests/
+└── Prueba.Tests                   xUnit
+    ├── Helpers                                      TestDb (SQLite en memoria), FakeProvider, ApiFactory, FailOnCompletedRequestService
+    ├── RequestControllerTests.cs
+    ├── RequestRepositoryTests.cs
+    ├── RequestWorkerServiceTests.cs
+    └── StatusRulesTests.cs
 ```
 
 ## 3. API
@@ -110,3 +127,67 @@ dotnet run --project src/Prueba.Api
 
 La base SQLite se crea sola en `data/portal.db` al iniciar (migraciones de EF Core). Para reiniciarla, borrar ese archivo.
 Peticiones de ejemplo en `src/Prueba.Api/Prueba.Api.http`.
+
+## 4. Worker
+
+Cada `PollIntervalSeconds` el Worker:
+
+1. Devuelve a `Pending` las solicitudes que llevan en `Processing` más de `ProcessingTimeoutSeconds` (proceso caído o fallo al guardar).
+2. Lee un lote de `Pending` (`BatchSize`).
+3. Por cada una, la toma con un `UPDATE` condicional: `Pending → Processing` y `Attempts + 1` en una sola sentencia. Si otro proceso ya la tomó, la salta.
+4. Llama al proveedor simulado con `ExternalReference` como clave de idempotencia.
+   - Éxito → `Completed`.
+   - Fallo transitorio → vuelve a `Pending`; al llegar a `MaxAttempts` pasa a `Failed`.
+   - Éxito pero falla el guardado → queda en `Processing` y no se reenvía hasta el timeout del paso 1.
+
+Estados: `Pending → Processing → Completed | Pending | Failed`. `Completed` y `Failed` son finales (regla 5).
+
+No hay transacción posible entre el proveedor y la base de datos: la garantía es "al menos una vez" con un proveedor idempotente por `ExternalReference` (regla 3).
+
+Configuración en `src/Prueba.Worker/appsettings.json`:
+
+| Clave                             | Por defecto | Uso                                               |
+|-----------------------------------|-------------|---------------------------------------------------|
+| `Worker:PollIntervalSeconds`      | 5           | Segundos entre ciclos                             |
+| `Worker:BatchSize`                | 10          | Solicitudes por ciclo                             |
+| `Worker:MaxAttempts`              | 3           | Intentos antes de `Failed`                        |
+| `Worker:ProcessingTimeoutSeconds` | 60          | Tiempo para considerar atascada una solicitud     |
+| `Provider:FailureRate`            | 0.3         | Probabilidad de fallo transitorio del simulado    |
+| `Provider:LatencyMs`              | 300         | Latencia simulada                                 |
+
+### Cómo ejecutar
+
+```
+dotnet run --project src/Prueba.Worker
+```
+
+Con la API corriendo, registrar solicitudes y consultar `GET /api/requests` para ver el cambio de estado.
+
+### Windows Service
+
+El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. En PowerShell como administrador:
+
+```
+dotnet publish src/Prueba.Worker -c Release -r win-x64 -o C:\Services\PruebaWorker
+sc.exe create PruebaWorker binPath= "C:\Services\PruebaWorker\Prueba.Worker.exe" start= auto
+sc.exe failure PruebaWorker reset= 86400 actions= restart/60000
+sc.exe start PruebaWorker
+sc.exe query PruebaWorker
+```
+
+En el servicio, `ConnectionStrings:Main` debe apuntar a una ruta absoluta (por `appsettings.json` del publish o variable de entorno `ConnectionStrings__Main`).
+
+## 5. Pruebas
+
+```
+dotnet test
+```
+
+27 pruebas sobre los riesgos principales: duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el esquema real, porque dependen del índice único y del `UPDATE` condicional.
+
+| Archivo                         | Escenarios                                                                                          |
+|---------------------------------|-----------------------------------------------------------------------------------------------------|
+| `StatusRulesTests`              | `Completed` y `Failed` son finales; transiciones válidas; salir de `Completed` lanza error y no persiste |
+| `RequestRepositoryTests`        | La violación del índice único es duplicado; otro error de base de datos no se reporta como duplicado |
+| `RequestWorkerServiceTests`     | Éxito con un solo envío; fallo transitorio y luego éxito; `Failed` tras `MaxAttempts`; `Completed` no se reenvía; solo un proceso toma la solicitud; fallo al guardar tras enviar no reenvía; recuperación tras timeout |
+| `RequestControllerTests`        | POST crea `Pending`; POST repetido → 409; 10 POST simultáneos crean una sola solicitud; campos vacíos → 400; filtro por estado y estado inválido → 400 |

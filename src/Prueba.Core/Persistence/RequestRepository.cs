@@ -8,7 +8,7 @@ using Prueba.Core.Persistence.Entities;
 
 namespace Prueba.Core.Persistence;
 
-public class RequestRepository(RequestDBContext db) : IRequestRepository
+public class RequestRepository(RequestDBContext db, TimeProvider clock) : IRequestRepository
 {
     // SQLITE_CONSTRAINT_UNIQUE: https://www.sqlite.org/rescode.html#constraint_unique
     private const int SqliteConstraintUnique = 2067;
@@ -64,6 +64,16 @@ public class RequestRepository(RequestDBContext db) : IRequestRepository
         return await query.OrderBy(r => r.InsertAt).ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<Request>> GetPendingRequestsAsync(int batchSize, CancellationToken ct = default)
+    {
+        return await db.Requests
+            .AsNoTracking()
+            .Where(r => r.Status == RequestStatus.Pending)
+            .OrderBy(r => r.InsertAt)
+            .Take(batchSize)
+            .ToListAsync(ct);
+    }
+
     public async Task UpdateRequestAsync(Request request, CancellationToken ct = default)
     {
         if (db.Entry(request).State == EntityState.Detached)
@@ -72,5 +82,31 @@ public class RequestRepository(RequestDBContext db) : IRequestRepository
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> TryUpdateRequestToProcessingAsync(int id, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+
+        var rows = await db.Requests
+            .Where(r => r.Id == id && r.Status == RequestStatus.Pending)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, RequestStatus.Processing)
+                .SetProperty(r => r.Attempts, r => r.Attempts + 1)
+                .SetProperty(r => r.UpdatedAt, now), ct);
+
+        return rows == 1;
+    }
+
+    public async Task<int> ResetStuckProcessingRequestsAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+        var limit = now - timeout;
+
+        return await db.Requests
+            .Where(r => r.Status == RequestStatus.Processing && r.UpdatedAt < limit)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, RequestStatus.Pending)
+                .SetProperty(r => r.UpdatedAt, now), ct);
     }
 }
