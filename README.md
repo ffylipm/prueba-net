@@ -87,6 +87,16 @@ Desinstalar:
 powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
 ```
 
+Configuración del servicio en `src/Prueba.Worker/appsettings.json` (instalado: `C:\Services\PruebaWorker\appsettings.json`):
+
+| Clave                             | Valor | Uso                         |
+|-----------------------------------|-------|-----------------------------|
+| `Worker:PollIntervalSeconds`      | 5     | Segundos entre ciclos       |
+| `Worker:BatchSize`                | 10    | Solicitudes por ciclo       |
+| `Worker:MaxAttempts`              | 3     | Intentos antes de `Failed`  |
+| `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`      |
+| `Provider:FailureRate`            | 0.3   | Probabilidad de fallo       |
+| `Provider:LatencyMs`              | 300   | Latencia simulada           |
 ## 1. Pruebas
 
 27 pruebas sobre duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el schema real, porque dependen del índice único y del `UPDATE` condicional.
@@ -114,6 +124,16 @@ Solución:
 - Frontend para crearlas, listarlas y filtrarlas.
 - Persistencia en SQLite.
 - Servicio en segundo plano, instalable como Servicio Windows, que envía las pendientes al proveedor y actualiza su estado.
+
+#### API
+
+| Método | Ruta                    | Respuestas      |
+|--------|-------------------------|-----------------|
+| POST   | `/api/requests`         | 201, 400, 409   |
+| GET    | `/api/requests?status=` | 200, 400        |
+| GET    | `/api/requests/{id}`    | 200, 404        |
+
+Errores en formato ProblemDetails. 409 = `externalReference` repetido.
 
 #### Schema
 
@@ -198,28 +218,6 @@ tests/
 ```
 
 Cada decisión se describe con: problema/contexto, alternativas consideradas, decisión, trade-offs, riesgos y validación.
-#### API
-
-| Método | Ruta                    | Respuestas      |
-|--------|-------------------------|-----------------|
-| POST   | `/api/requests`         | 201, 400, 409   |
-| GET    | `/api/requests?status=` | 200, 400        |
-| GET    | `/api/requests/{id}`    | 200, 404        |
-
-Errores en formato ProblemDetails. 409 = `externalReference` repetido.
-
-#### Configuración del servicio
-
-`src/Prueba.Worker/appsettings.json`:
-
-| Clave                             | Valor | Uso                         |
-|-----------------------------------|-------|-----------------------------|
-| `Worker:PollIntervalSeconds`      | 5     | Segundos entre ciclos       |
-| `Worker:BatchSize`                | 10    | Solicitudes por ciclo       |
-| `Worker:MaxAttempts`              | 3     | Intentos antes de `Failed`  |
-| `Worker:ProcessingTimeoutSeconds` | 60    | Límite en `Processing`      |
-| `Provider:FailureRate`            | 0.3   | Probabilidad de fallo       |
-| `Provider:LatencyMs`              | 300   | Latencia simulada           |
 ### D1. Duplicados por `externalReference`
 
 - **Problema/contexto:** los usuarios reintentan cuando perciben lentitud (regla 3).
