@@ -4,28 +4,34 @@ Prueba técnica Full Stack .NET.
 
 ## Cómo ejecutar
 
-**Requisitos:** .NET SDK 10. No hace falta instalar base de datos: SQLite se crea sola.
+Requisitos: .NET SDK 10.
 
-Desde la raíz del repositorio, cada uno en su propia terminal:
+1. API en `http://localhost:5112`. Crea `data/portal.db` al iniciar.
 
-| # | Qué               | Comando                                  | Resultado                                  |
-|---|-------------------|------------------------------------------|--------------------------------------------|
-| 1 | API               | `dotnet run --project src/Prueba.Api`    | `http://localhost:5112`, crea `data/portal.db` |
-| 2 | Worker            | `dotnet run --project src/Prueba.Worker` | Procesa las solicitudes `Pending` cada 5 s |
-| 3 | Pruebas           | `dotnet test`                            | 27 pruebas                                 |
+   ```
+   dotnet run --project src/Prueba.Api
+   ```
 
-**Probar el flujo** (con la API y el Worker corriendo):
+2. Worker, en otra terminal:
+
+   ```
+   dotnet run --project src/Prueba.Worker
+   ```
+
+3. Pruebas:
+
+   ```
+   dotnet test
+   ```
+
+Para probar el flujo, crear una solicitud y consultarla. Pasa de `Pending` a `Completed`, o a `Failed` tras 3 fallos del proveedor simulado:
 
 ```
 curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
 curl http://localhost:5112/api/requests
 ```
 
-La solicitud pasa de `Pending` a `Completed` (o a `Failed` tras 3 fallos del proveedor simulado). Hay más peticiones de ejemplo en `src/Prueba.Api/Prueba.Api.http`.
-
-**Reiniciar la base:** detener la API y el Worker y borrar `data/portal.db`.
-
-**Como Windows Service:** ver [Worker → Windows Service](#windows-service).
+Más ejemplos en `src/Prueba.Api/Prueba.Api.http`. Para reiniciar la base, borrar `data/portal.db`. Instalación como Windows Service en [Worker → Windows Service](#windows-service).
 
 ## El problema
 
