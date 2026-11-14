@@ -2,6 +2,31 @@
 
 Prueba técnica Full Stack .NET.
 
+## Cómo ejecutar
+
+**Requisitos:** .NET SDK 10. No hace falta instalar base de datos: SQLite se crea sola.
+
+Desde la raíz del repositorio, cada uno en su propia terminal:
+
+| # | Qué               | Comando                                  | Resultado                                  |
+|---|-------------------|------------------------------------------|--------------------------------------------|
+| 1 | API               | `dotnet run --project src/Prueba.Api`    | `http://localhost:5112`, crea `data/portal.db` |
+| 2 | Worker            | `dotnet run --project src/Prueba.Worker` | Procesa las solicitudes `Pending` cada 5 s |
+| 3 | Pruebas           | `dotnet test`                            | 27 pruebas                                 |
+
+**Probar el flujo** (con la API y el Worker corriendo):
+
+```
+curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/json" -d "{\"externalReference\":\"OP-1\",\"customerId\":\"C1\",\"serviceCode\":\"S1\",\"description\":\"Prueba\"}"
+curl http://localhost:5112/api/requests
+```
+
+La solicitud pasa de `Pending` a `Completed` (o a `Failed` tras 3 fallos del proveedor simulado). Hay más peticiones de ejemplo en `src/Prueba.Api/Prueba.Api.http`.
+
+**Reiniciar la base:** detener la API y el Worker y borrar `data/portal.db`.
+
+**Como Windows Service:** ver [Worker → Windows Service](#windows-service).
+
 ## El problema
 
 Una empresa registra solicitudes de servicio desde un portal web y las envía a un proveedor externo. Hay tres dificultades:
@@ -117,16 +142,7 @@ Errores (formato ProblemDetails, RFC 7807):
 
 Duplicados: el servicio busca el `externalReference` antes de insertar, y el índice único cubre el caso de dos POST simultáneos.
 
-### Cómo ejecutar
-
-Requisitos: .NET SDK 10.
-
-```
-dotnet run --project src/Prueba.Api
-```
-
-La base SQLite se crea sola en `data/portal.db` al iniciar (migraciones de EF Core). Para reiniciarla, borrar ese archivo.
-Peticiones de ejemplo en `src/Prueba.Api/Prueba.Api.http`.
+Base de datos: la API y el Worker aplican las migraciones de EF Core al iniciar, así que `data/portal.db` se crea con el schema sin pasos manuales.
 
 ## 4. Worker
 
@@ -155,14 +171,6 @@ Configuración en `src/Prueba.Worker/appsettings.json`:
 | `Provider:FailureRate`            | 0.3         | Probabilidad de fallo transitorio del simulado    |
 | `Provider:LatencyMs`              | 300         | Latencia simulada                                 |
 
-### Cómo ejecutar
-
-```
-dotnet run --project src/Prueba.Worker
-```
-
-Con la API corriendo, registrar solicitudes y consultar `GET /api/requests` para ver el cambio de estado.
-
 ### Windows Service
 
 El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. En PowerShell como administrador:
@@ -179,11 +187,7 @@ En el servicio, `ConnectionStrings:Main` debe apuntar a una ruta absoluta (por `
 
 ## 5. Pruebas
 
-```
-dotnet test
-```
-
-27 pruebas sobre los riesgos principales: duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el esquema real, porque dependen del índice único y del `UPDATE` condicional.
+27 pruebas (`dotnet test`) sobre los riesgos principales: duplicados, estados y fallos del proveedor. Usan SQLite en memoria con el esquema real, porque dependen del índice único y del `UPDATE` condicional.
 
 | Archivo                         | Escenarios                                                                                          |
 |---------------------------------|-----------------------------------------------------------------------------------------------------|
