@@ -31,7 +31,23 @@ curl -X POST http://localhost:5112/api/requests -H "Content-Type: application/js
 curl http://localhost:5112/api/requests
 ```
 
-Más ejemplos en `src/Prueba.Api/Prueba.Api.http`. Para reiniciar la base, borrar `data/portal.db`. Instalación como Windows Service en [Worker → Windows Service](#windows-service).
+Más ejemplos en `src/Prueba.Api/Prueba.Api.http`. Para reiniciar la base, borrar `data/portal.db`.
+
+### Worker como Windows Service
+
+En PowerShell como administrador, desde la raíz del repositorio:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\install-worker-service.ps1
+```
+
+Publica el Worker en `C:\Services\PruebaWorker`, configura la ruta absoluta de `data\portal.db` (la misma que usa la API), crea el servicio `PruebaWorker` con inicio automático y reinicio ante fallos, y lo arranca. Si ya existe, lo reemplaza. Parámetros opcionales: `-ServiceName`, `-InstallPath`, `-DatabasePath`.
+
+Para quitarlo:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\uninstall-worker-service.ps1
+```
 
 ## El problema
 
@@ -108,6 +124,10 @@ src/
         ├── RequestWorkerService.cs                  Toma Pending, llama al proveedor y actualiza el estado
         └── WorkerOptions.cs                         WorkerOptions y ProviderOptions (appsettings del Worker)
 
+scripts/
+├── install-worker-service.ps1                       Publica e instala el Worker como Windows Service
+└── uninstall-worker-service.ps1
+
 tests/
 └── Prueba.Tests                   xUnit
     ├── Helpers                                      TestDb (SQLite en memoria), FakeProvider, ApiFactory, FailOnCompletedRequestService
@@ -177,19 +197,7 @@ Configuración en `src/Prueba.Worker/appsettings.json`:
 | `Provider:FailureRate`            | 0.3         | Probabilidad de fallo transitorio del simulado    |
 | `Provider:LatencyMs`              | 300         | Latencia simulada                                 |
 
-### Windows Service
-
-El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. En PowerShell como administrador:
-
-```
-dotnet publish src/Prueba.Worker -c Release -r win-x64 -o C:\Services\PruebaWorker
-sc.exe create PruebaWorker binPath= "C:\Services\PruebaWorker\Prueba.Worker.exe" start= auto
-sc.exe failure PruebaWorker reset= 86400 actions= restart/60000
-sc.exe start PruebaWorker
-sc.exe query PruebaWorker
-```
-
-En el servicio, `ConnectionStrings:Main` debe apuntar a una ruta absoluta (por `appsettings.json` del publish o variable de entorno `ConnectionStrings__Main`).
+El Worker usa `AddWindowsService`: en consola corre normal y, instalado como servicio, se integra con el Service Control Manager y el Event Log. Instalación en [Worker como Windows Service](#worker-como-windows-service).
 
 ## 5. Pruebas
 
